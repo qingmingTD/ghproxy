@@ -1,9 +1,5 @@
 export default {
   async fetch(request, env, ctx) {
-    // 定义目标域名
-    const targetHost = "github.com";
-    const targetProtocol = "https";
-    
     // 解析请求URL
     const url = new URL(request.url);
     
@@ -19,9 +15,27 @@ export default {
       });
     }
     
+    // 从路径中提取目标URL（格式：/https://目标域名/路径 或 /http://目标域名/路径）
+    const pathParts = url.pathname.split('/').filter(part => part);
+    if (pathParts.length === 0 || !['http:', 'https:'].includes(pathParts[0])) {
+      return new Response('请使用格式: https://自定义域名/https://要代理的域名', {
+        status: 400,
+        headers: {
+          "Content-Type": "text/plain",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+    
+    // 解析目标协议和域名
+    const targetProtocol = pathParts[0].replace(':', ''); // 'http' 或 'https'
+    const targetHost = pathParts[1];
+    
+    // 构建新的路径（去掉协议和域名部分）
+    const newPath = pathParts.slice(2).length > 0 ? `/${pathParts.slice(2).join('/')}` : '/';
+    
     // 构建目标URL
-    url.hostname = targetHost;
-    url.protocol = targetProtocol;
+    const targetUrl = new URL(`${targetProtocol}://${targetHost}${newPath}${url.search}${url.hash}`);
     
     // 复制并修改请求头
     const headers = new Headers(request.headers);
@@ -39,7 +53,7 @@ export default {
     headers.delete("CF-RAY");
     
     // 创建新请求
-    const newRequest = new Request(url, {
+    const newRequest = new Request(targetUrl, {
       method: request.method,
       headers: headers,
       body: request.body,
@@ -65,12 +79,13 @@ export default {
       // 处理重定向
       if (response.redirected) {
         const redirectedUrl = new URL(response.url);
-        // 如果重定向到目标域名下，替换为代理域名
-        if (redirectedUrl.hostname === targetHost) {
-          redirectedUrl.hostname = url.hostname;
-          redirectedUrl.protocol = url.protocol;
-          return Response.redirect(redirectedUrl.toString(), response.status);
-        }
+        // 将重定向URL转换为代理URL格式
+        const proxyRedirectUrl = new URL(request.url);
+        proxyRedirectUrl.pathname = `/${redirectedUrl.protocol}/${redirectedUrl.hostname}${redirectedUrl.pathname}`;
+        proxyRedirectUrl.search = redirectedUrl.search;
+        proxyRedirectUrl.hash = redirectedUrl.hash;
+        
+        return Response.redirect(proxyRedirectUrl.toString(), response.status);
       }
       
       // 准备响应并添加CORS头
