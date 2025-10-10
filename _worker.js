@@ -1,5 +1,9 @@
 export default {
   async fetch(request, env, ctx) {
+    // 定义默认目标（GitHub）
+    const defaultTargetHost = "github.com";
+    const defaultTargetProtocol = "https";
+    
     // 解析请求URL
     const url = new URL(request.url);
     
@@ -15,27 +19,31 @@ export default {
       });
     }
     
-    // 从路径中提取目标URL（格式：/https://目标域名/路径 或 /http://目标域名/路径）
+    // 变量初始化
+    let targetHost, targetProtocol, targetUrl;
+    let isDynamicProxy = false;
+    
+    // 检查是否是动态代理模式（路径中包含http://或https://）
     const pathParts = url.pathname.split('/').filter(part => part);
-    if (pathParts.length === 0 || !['http:', 'https:'].includes(pathParts[0])) {
-      return new Response('请使用格式: https://自定义域名/https://要代理的域名', {
-        status: 400,
-        headers: {
-          "Content-Type": "text/plain",
-          "Access-Control-Allow-Origin": "*",
-        },
-      });
+    if (pathParts.length > 0 && ['http:', 'https:'].includes(pathParts[0])) {
+      // 动态代理模式
+      isDynamicProxy = true;
+      targetProtocol = pathParts[0].replace(':', ''); // 'http' 或 'https'
+      targetHost = pathParts[1];
+      
+      // 构建新的路径（去掉协议和域名部分）
+      const newPath = pathParts.slice(2).length > 0 ? `/${pathParts.slice(2).join('/')}` : '/';
+      
+      // 构建目标URL
+      targetUrl = new URL(`${targetProtocol}://${targetHost}${newPath}${url.search}${url.hash}`);
+    } else {
+      // 默认代理GitHub模式
+      targetHost = defaultTargetHost;
+      targetProtocol = defaultTargetProtocol;
+      
+      // 构建目标URL（使用原始路径）
+      targetUrl = new URL(`${targetProtocol}://${targetHost}${url.pathname}${url.search}${url.hash}`);
     }
-    
-    // 解析目标协议和域名
-    const targetProtocol = pathParts[0].replace(':', ''); // 'http' 或 'https'
-    const targetHost = pathParts[1];
-    
-    // 构建新的路径（去掉协议和域名部分）
-    const newPath = pathParts.slice(2).length > 0 ? `/${pathParts.slice(2).join('/')}` : '/';
-    
-    // 构建目标URL
-    const targetUrl = new URL(`${targetProtocol}://${targetHost}${newPath}${url.search}${url.hash}`);
     
     // 复制并修改请求头
     const headers = new Headers(request.headers);
@@ -79,13 +87,23 @@ export default {
       // 处理重定向
       if (response.redirected) {
         const redirectedUrl = new URL(response.url);
-        // 将重定向URL转换为代理URL格式
-        const proxyRedirectUrl = new URL(request.url);
-        proxyRedirectUrl.pathname = `/${redirectedUrl.protocol}/${redirectedUrl.hostname}${redirectedUrl.pathname}`;
-        proxyRedirectUrl.search = redirectedUrl.search;
-        proxyRedirectUrl.hash = redirectedUrl.hash;
         
-        return Response.redirect(proxyRedirectUrl.toString(), response.status);
+        if (isDynamicProxy) {
+          // 动态代理模式：将重定向URL转换为代理URL格式
+          const proxyRedirectUrl = new URL(request.url);
+          proxyRedirectUrl.pathname = `/${redirectedUrl.protocol}/${redirectedUrl.hostname}${redirectedUrl.pathname}`;
+          proxyRedirectUrl.search = redirectedUrl.search;
+          proxyRedirectUrl.hash = redirectedUrl.hash;
+          
+          return Response.redirect(proxyRedirectUrl.toString(), response.status);
+        } else {
+          // 默认GitHub代理模式：保持在GitHub域名下重定向
+          if (redirectedUrl.hostname === defaultTargetHost) {
+            redirectedUrl.hostname = url.hostname;
+            redirectedUrl.protocol = url.protocol;
+            return Response.redirect(redirectedUrl.toString(), response.status);
+          }
+        }
       }
       
       // 准备响应并添加CORS头
